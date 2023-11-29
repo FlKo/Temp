@@ -1,0 +1,216 @@
+#include <QApplication>
+#include <QSqlQueryModel>
+#include <QHeaderView>
+#include <QCheckBox>
+#include <QComboBox>
+#include <QHBoxLayout>
+#include <QMainWindow>
+#include <QTableView>
+
+class CustomTableModel : public QSqlQueryModel
+{
+    Q_OBJECT
+
+public:
+    CustomTableModel(QObject *parent = nullptr)
+        : QSqlQueryModel(parent), m_checkBoxColumn(0)
+    {
+        // Initialize the header data and add a checkbox column
+        m_headers << "Checkbox";
+        m_checkBoxColumn = m_headers.size() - 1;
+
+        // Fetch column names from the database view
+        fetchColumnNames();
+    }
+
+    Qt::ItemFlags flags(const QModelIndex &index) const override
+    {
+        // Set checkboxes to be editable
+        if (index.column() == m_checkBoxColumn)
+            return Qt::ItemIsEnabled | Qt::ItemIsUserCheckable;
+
+        return QSqlQueryModel::flags(index);
+    }
+
+    QVariant data(const QModelIndex &index, int role) const override
+    {
+        if (role == Qt::CheckStateRole && index.column() == m_checkBoxColumn)
+        {
+            // Return the check state for the checkbox column
+            return isChecked(index) ? Qt::Checked : Qt::Unchecked;
+        }
+
+        return QSqlQueryModel::data(index, role);
+    }
+
+    bool setData(const QModelIndex &index, const QVariant &value, int role) override
+    {
+        if (role == Qt::CheckStateRole && index.column() == m_checkBoxColumn)
+        {
+            // Update the check state when the checkbox is clicked
+            setChecked(index, value == Qt::Checked);
+            emit dataChanged(index, index);
+            return true;
+        }
+
+        return QSqlQueryModel::setData(index, value, role);
+    }
+
+    void setCheckBoxColumn(int column)
+    {
+        // Set the column for checkboxes
+        m_checkBoxColumn = column;
+    }
+
+    void fetchColumnNames()
+    {
+        // Fetch column names from the database view
+        QSqlQuery query;
+        query.prepare("PRAGMA table_info(v_fooBar)");
+        if (query.exec())
+        {
+            while (query.next())
+            {
+                m_headers << query.value(1).toString();
+            }
+        }
+    }
+
+    void setDistinctValues(int column, QComboBox *comboBox)
+    {
+        // Fetch distinct values for a column and populate the combo box
+        QStringList distinctValues;
+        QSqlQuery query;
+        query.prepare("SELECT DISTINCT " + m_headers.at(column) + " FROM v_fooBar");
+        if (query.exec())
+        {
+            while (query.next())
+            {
+                distinctValues << query.value(0).toString();
+            }
+        }
+
+        comboBox->addItems(distinctValues);
+        comboBox->addItem("-");
+    }
+
+private:
+    QStringList m_headers;
+    int m_checkBoxColumn;
+
+    bool isChecked(const QModelIndex &index) const
+    {
+        // Retrieve the check state for the checkbox column
+        return data(index, Qt::CheckStateRole) == Qt::Checked;
+    }
+
+    void setChecked(const QModelIndex &index, bool checked)
+    {
+        // Set the check state for the checkbox column
+        setData(index, checked ? Qt::Checked : Qt::Unchecked, Qt::CheckStateRole);
+    }
+};
+
+class CustomHeaderView : public QHeaderView
+{
+    Q_OBJECT
+
+public:
+    CustomHeaderView(Qt::Orientation orientation, QWidget *parent = nullptr)
+        : QHeaderView(orientation, parent)
+    {
+        m_comboBoxes.reserve(5); // Assuming a maximum of 5 columns for demonstration
+    }
+
+    void setComboBox(int logicalIndex, QComboBox *comboBox)
+    {
+        // Set up the combo box for filtering at the specified logical index
+        m_comboBoxes.insert(logicalIndex, comboBox);
+        connect(comboBox, QOverload<int>::of(&QComboBox::activated),
+                this, &CustomHeaderView::filterActivated);
+    }
+
+signals:
+    void filterChanged(int column, const QString &text);
+
+private slots:
+    void filterActivated(int index)
+    {
+        // Emit signal when the combo box selection changes
+        emit filterChanged(logicalIndex(m_comboBoxes.indexOf(qobject_cast<QComboBox *>(sender()))), currentText());
+    }
+
+private:
+    QVector<QComboBox *> m_comboBoxes;
+};
+
+class MainWindow : public QMainWindow
+{
+    Q_OBJECT
+
+public:
+    MainWindow(QWidget *parent = nullptr)
+        : QMainWindow(parent)
+    {
+        // Set up the SQLite database connection and open it
+
+        // Assuming you have a QSqlDatabase named "db" connected to your SQLite database
+        // QSqlDatabase db = QSqlDatabase::addDatabase("QSQLITE");
+        // db.setDatabaseName("your_database_name.db");
+        // db.open();
+
+        // Create the table view and model
+        m_tableView = new QTableView(this);
+        m_customModel = new CustomTableModel(this);
+
+        // Set up the initial query for the model (replace this with your actual query)
+        m_customModel->setQuery("SELECT * FROM v_fooBar");
+
+        m_tableView->setModel(m_customModel);
+
+        // Create the custom header view
+        m_customHeaderView = new CustomHeaderView(Qt::Horizontal, m_tableView);
+        m_tableView->setHorizontalHeader(m_customHeaderView);
+
+        // Set up combo boxes for each column in the header view
+        for (int i = 0; i < m_customModel->columnCount(); ++i)
+        {
+            QComboBox *comboBox = new QComboBox(m_customHeaderView);
+            m_customHeaderView->setComboBox(i, comboBox);
+            m_customModel->setDistinctValues(i, comboBox);
+        }
+
+        // Set up the layout
+        QHBoxLayout *layout = new QHBoxLayout;
+        layout->addWidget(m_tableView);
+        setCentralWidget(new QWidget);
+        centralWidget()->setLayout(layout);
+
+        // Connect signals for filtering
+        connect(m_customHeaderView, &CustomHeaderView::filterChanged,
+                this, &MainWindow::filterColumn);
+    }
+
+private slots:
+    void filterColumn(int column, const QString &text)
+    {
+        // Apply filtering when the combo box selection changes
+        if (text == "-")
+            m_customModel->setFilter("");
+        else
+            m_customModel->setFilter(QString("%1 = '%2'").arg(m_customModel->headerData(column, Qt::Horizontal).toString(), text));
+    }
+
+private:
+    QTableView *m_tableView;
+    CustomTableModel *m_customModel;
+    CustomHeaderView *m_customHeaderView;
+};
+
+int main(int argc, char *argv[])
+{
+    QApplication a(argc, argv);
+    MainWindow w;
+    w.show();
+    return a.exec();
+}
