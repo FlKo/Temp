@@ -214,3 +214,132 @@ int main(int argc, char *argv[])
     w.show();
     return a.exec();
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+#include <Windows.h>
+#include <QDialog>
+#include <QApplication>
+
+class MyQtDialog : public QDialog
+{
+public:
+    MyQtDialog(QWidget* parent = nullptr) : QDialog(parent), hOverlayWindow(nullptr) {}
+
+    void showModallyWithOverlay()
+    {
+        createOverlayWindow();
+        QDialog::exec();
+        destroyOverlayWindow();
+    }
+
+private:
+    HWND hOverlayWindow;
+
+    static LRESULT CALLBACK OverlayWindowProcStatic(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
+    {
+        MyQtDialog* instance = reinterpret_cast<MyQtDialog*>(GetWindowLongPtr(hwnd, GWLP_USERDATA));
+
+        if (instance)
+        {
+            return instance->overlayWindowProc(hwnd, uMsg, wParam, lParam);
+        }
+
+        return DefWindowProc(hwnd, uMsg, wParam, lParam);
+    }
+
+    LRESULT CALLBACK overlayWindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
+    {
+        switch (uMsg)
+        {
+            case WM_CREATE:
+                // Make the window transparent
+                SetLayeredWindowAttributes(hwnd, RGB(0, 0, 0), 0, LWA_COLORKEY);
+                SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN), SWP_SHOWWINDOW);
+                break;
+
+            case WM_DESTROY:
+                // Clean up when the overlay window is destroyed
+                if (qtDialog)
+                {
+                    qtDialog->close();
+                    delete qtDialog;
+                }
+                break;
+
+            case WM_LBUTTONDOWN:
+            case WM_RBUTTONDOWN:
+            case WM_MBUTTONDOWN:
+            case WM_KEYDOWN:
+            case WM_SYSKEYDOWN:
+                // Ignore mouse and keyboard input to block user interaction with the main window
+                return 0;
+
+            case WM_CLOSE:
+                // Close the overlay window when the Qt dialog is closed
+                DestroyWindow(hwnd);
+                break;
+
+            default:
+                return DefWindowProc(hwnd, uMsg, wParam, lParam);
+        }
+
+        return 0;
+    }
+
+    void createOverlayWindow()
+    {
+        WNDCLASS wndClass = {};
+        wndClass.lpfnWndProc = OverlayWindowProcStatic;
+        wndClass.hInstance = GetModuleHandle(nullptr);
+        wndClass.lpszClassName = L"OverlayWindowClass";
+
+        if (RegisterClass(&wndClass))
+        {
+            hOverlayWindow = CreateWindowEx(WS_EX_LAYERED | WS_EX_TOPMOST, L"OverlayWindowClass", L"Overlay Window",
+                WS_POPUP, 0, 0, GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN), nullptr, nullptr, nullptr, nullptr);
+
+            SetWindowLongPtr(hOverlayWindow, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(this));
+
+            SetLayeredWindowAttributes(hOverlayWindow, RGB(0, 0, 0), 0, LWA_COLORKEY);
+            ShowWindow(hOverlayWindow, SW_SHOWNORMAL);
+            UpdateWindow(hOverlayWindow);
+        }
+    }
+
+    void destroyOverlayWindow()
+    {
+        // Clean up when the overlay window is destroyed
+        if (hOverlayWindow)
+        {
+            DestroyWindow(hOverlayWindow);
+            hOverlayWindow = nullptr;
+        }
+    }
+};
+
+int main(int argc, char *argv[])
+{
+    // Initialize the Qt application
+    QApplication a(argc, argv);
+
+    // Create an instance of MyQtDialog
+    MyQtDialog myQtDialog;
+
+    // Show the Qt dialog modally with overlay
+    myQtDialog.showModallyWithOverlay();
+
+    return a.exec();
+}
+
+
